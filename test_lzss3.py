@@ -30,17 +30,12 @@ def test_compress():
 
     assert list(_compress(b'a' + b'b' * 4095 + b'abb'))[-1] == (3, -4096)
 
+    assert list(_compress(b'abcdefg' * 10)) == \
+        [97, 98, 99, 100, 101, 102, 103, (18, -7), (18, -21), (18, -42),
+         (9, -56)]
+
 def test_roundtrip():
-    with open("compress.py", "rb") as f:
-        indata = f.read()
-    out = BytesIO()
-    compress(indata, out)
-    compressed_data = out.getvalue()
-    assert len(compressed_data) < len(indata)
-
-    decompressed_data = decompress(out.getvalue())
-    assert indata == decompressed_data
-
+    #assert False
     with open("lzss3.py", "rb") as f:
         indata = f.read()
     out = BytesIO()
