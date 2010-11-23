@@ -16,7 +16,7 @@ def bits(byte):
             (byte >> 1) & 1,
             (byte) & 1)
 
-def decompress(indata):
+def decompress(indata, decompressed_size):
     """Decompress LZSS-compressed bytes. Returns a bytearray."""
     data = bytearray()
 
@@ -33,10 +33,6 @@ def decompress(indata):
         return (a << 8) | b
     def copybyte():
         data.append(next(it))
-
-    header = bytes(next(it) for _ in range(4))
-    assert header[0] == 0x10
-    decompressed_size, = unpack("<L", header[1:] + b"\x00")
 
     while len(data) < decompressed_size:
         b = readbyte()
@@ -99,15 +95,13 @@ def main(args):
 
     f.seek(filelen - end_delta, SEEK_SET)
 
-    header = b'\x10' + pack("<L", decompressed_size)[:3]
     data = bytearray()
     data.extend(f.read(end_delta - padding))
-    data.extend(header[::-1])
     data.reverse()
 
     #stdout.write(data.tostring())
 
-    uncompressed_data = decompress(data)
+    uncompressed_data = decompress(data, decompressed_size)
     uncompressed_data.reverse()
 
 
