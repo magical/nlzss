@@ -6,7 +6,8 @@ from os import SEEK_SET, SEEK_CUR, SEEK_END
 from errno import EPIPE
 from struct import pack, unpack
 
-__all__ = ('decompress', 'decompress_file', 'decompress_bytes')
+__all__ = ('decompress', 'decompress_file', 'decompress_bytes',
+           'decompress_overlay', 'DecompressionError')
 
 class DecompressionError(ValueError):
     pass
@@ -54,10 +55,7 @@ def decompress_raw_lzss10(indata, decompressed_size, _overlay=False):
         flags = bits(b)
         for flag in flags:
             if flag == 0:
-                try:
-                    copybyte()
-                except StopIteration:
-                    return data
+                copybyte()
             elif flag == 1:
                 sh = readshort()
                 count = (sh >> 0xc) + 3
@@ -193,16 +191,16 @@ def decompress_bytes(data):
     """Decompress LZSS-compressed bytes. Returns a bytearray."""
     header = data[:4]
     if header[0] == 0x10:
-        decompress = decompress_raw_lzss10
-    elif header[1] == 0x11:
-        decompress = decompress_raw_lzss11
+        decompress_raw = decompress_raw_lzss10
+    elif header[0] == 0x11:
+        decompress_raw = decompress_raw_lzss11
     else:
         raise DecompressionError("not as lzss-compressed file")
 
     decompressed_size, = unpack("<L", header[1:] + b'\x00')
 
     data = data[4:]
-    return decompress_raw_lzss10(data, decompressed_size)
+    return decompress_raw(data, decompressed_size)
 
 def decompress_file(f):
     """Decompress an LZSS-compressed file. Returns a bytearray.
@@ -212,16 +210,16 @@ def decompress_file(f):
     """
     header = f.read(4)
     if header[0] == 0x10:
-        decompress = decompress_raw_lzss10
-    elif header[1] == 0x11:
-        decompress = decompress_raw_lzss11
+        decompress_raw = decompress_raw_lzss10
+    elif header[0] == 0x11:
+        decompress_raw = decompress_raw_lzss11
     else:
         raise DecompressionError("not as lzss-compressed file")
 
     decompressed_size, = unpack("<L", header[1:] + b'\x00')
 
     data = f.read()
-    return decompress_raw_lzss10(data, decompressed_size)
+    return decompress_raw(data, decompressed_size)
 
 def main(args=None):
     if args is None:
@@ -258,8 +256,7 @@ def main(args=None):
         if overlay:
             decompress_overlay(f, stdout)
         else:
-            data = f.read()
-            stdout.write(decompress(data))
+            stdout.write(decompress_file(f))
     except IOError as e:
         if e.errno == EPIPE:
             # don't complain about a broken pipe
