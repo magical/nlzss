@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
 from lzss3 import (decompress_raw_lzss10, decompress_raw_lzss11,
-                   decompress_overlay)
+                   decompress_overlay, decompress)
+from compress import _compress, compress
+
+from io import BytesIO
 
 def test_lzss10():
     assert decompress_raw_lzss10(b'\x00', 0) == b''
@@ -16,13 +19,42 @@ def test_lzss11():
     assert decompress_raw_lzss11(b'\x08abcd\x10\x07\xb0\x03', 400) == b'abcd' * 100
 
 def test_overlay():
-    from io import BytesIO
     in_ = BytesIO(b'\x01\xd0abcd\x08\xff\x10\x00\x00\x09\x04\x00\x00\x00')
     out = BytesIO()
     decompress_overlay(in_, out)
     assert out.getvalue() == b'abcd' * 5
 
+def test_compress():
+    assert list(_compress(b'abcdabcd')) == [97, 98, 99, 100, (4, -4)]
+    assert list(_compress(b'xaaabaaaaa')) == [120, 97, 97, 97, 98, (3, -4), 97, 97]
+
+    assert list(_compress(b'a' + b'b' * 4095 + b'abb'))[-1] == (3, -4096)
+
+def test_roundtrip():
+    with open("compress.py", "rb") as f:
+        indata = f.read()
+    out = BytesIO()
+    compress(indata, out)
+    compressed_data = out.getvalue()
+    assert len(compressed_data) < len(indata)
+
+    decompressed_data = decompress(out.getvalue())
+    assert indata == decompressed_data
+
+    with open("lzss3.py", "rb") as f:
+        indata = f.read()
+    out = BytesIO()
+    compress(indata, out)
+    compressed_data = out.getvalue()
+    assert len(compressed_data) < len(indata)
+
+    decompressed_data = decompress(out.getvalue())
+    assert indata == decompressed_data
+
+
 if __name__ == '__main__':
     test_lzss10()
     test_lzss11()
     test_overlay()
+    test_compress()
+    test_roundtrip()

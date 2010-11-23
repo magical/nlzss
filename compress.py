@@ -2,6 +2,7 @@
 # a guide
 from sys import stderr
 
+from collections import defaultdict
 from operator import itemgetter
 from struct import pack, unpack
 
@@ -12,6 +13,7 @@ class SlidingWindow:
             match_max = size
         self.size = size
         self.data = type()
+        self.hash = defaultdict(list)
         self.full = False
         self.nextindex = 0
         self.match_max = min(size, match_max)
@@ -19,10 +21,14 @@ class SlidingWindow:
 
     def append(self, item):
         if self.full:
+            olditem = self.data[self.nextindex]
             self.data[self.nextindex] = item
+            self.hash[olditem].pop(0)
+            self.hash[item].append(self.nextindex)
             self.nextindex = (self.nextindex + 1) % self.size
         else:
             self.data.append(item)
+            self.hash[item].append(self.nextindex)
             self.nextindex += 1
             if self.size <= self.nextindex:
                 self.full = True
@@ -33,17 +39,21 @@ class SlidingWindow:
             self.append(x)
 
     def search(self, buf):
-        """ pathologically stupid search function """
         counts = []
         start = self.nextindex if self.full else 0
         size = self.size if self.full else self.nextindex
         match_max = min(self.match_max, size)
         match_min = self.match_min
 
-        for i in range(size):
-            matchlen = self.match(buf, start + i)
+        indices = self.hash[buf[0]]
+        for i in indices:
+            matchlen = self.match(buf, i)
             if matchlen >= match_min:
-                counts.append((matchlen, i - size))
+                if i < self.nextindex:
+                    disp = i - self.nextindex
+                else:
+                    disp = i - (self.size + self.nextindex)
+                counts.append((matchlen, disp))
                 if matchlen >= match_max:
                     return counts[-1]
 
@@ -70,17 +80,6 @@ class SlidingWindow:
             else:
                 break
         return matchlen
-
-#class LZWindow:
-#    
-#    size = 2 ** 12
-#
-#    def __init__(self, ):
-#        
-#    
-#    def search(self):
-#        
-#
 
 
 def _compress(input):
