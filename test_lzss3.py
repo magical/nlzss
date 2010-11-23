@@ -29,10 +29,11 @@ def test_compress():
     assert list(_compress(b'xaaabaaaaa')) == [120, 97, 97, 97, 98, (3, -4), 97, 97]
 
     assert list(_compress(b'a' + b'b' * 4095 + b'abb'))[-1] == (3, -4096)
+    assert list(_compress(b'a' + b'b' * 4096 + b'abb'))[-1] == 98
 
+    #print( list(_compress(b'abcdefg' * 10)) )
     assert list(_compress(b'abcdefg' * 10)) == \
-        [97, 98, 99, 100, 101, 102, 103, (18, -7), (18, -21), (18, -42),
-         (9, -56)]
+        [97, 98, 99, 100, 101, 102, 103, (18, -7), (18, -21), (18, -42), (9, -56)]
 
 def test_roundtrip():
     #assert False

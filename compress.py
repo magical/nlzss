@@ -6,54 +6,61 @@ from collections import defaultdict
 from operator import itemgetter
 from struct import pack, unpack
 
-
 class SlidingWindow:
-    def __init__(self, size, type=bytearray, match_min=1, match_max=None):
-        if match_max is None:
-            match_max = size
-        self.size = size
-        self.data = type()
+    def __init__(self, buf, size=4096, disp_min=1, match_min=1, match_max=None):
+        self.data = buf
         self.hash = defaultdict(list)
         self.full = False
-        self.nextindex = 0
-        self.match_max = min(size, match_max)
+
+        self.size = size
+        self.start = 0
+        self.stop = 0
+        self.index = disp_min - 1
+
         self.match_min = match_min
 
-    def append(self, item):
+        if match_max is None:
+            match_max = size
+        self.match_max = min(size, match_max)
+
+        self.disp_min = disp_min
+
+    def next(self):
         if self.full:
-            olditem = self.data[self.nextindex]
-            self.data[self.nextindex] = item
+            olditem = self.data[self.start]
             self.hash[olditem].pop(0)
-            self.hash[item].append(self.nextindex)
-            self.nextindex = (self.nextindex + 1) % self.size
+
+        item = self.data[self.stop]
+        self.hash[item].append(self.stop)
+        self.stop += 1
+        self.index += 1
+
+        if self.full:
+            self.start += 1
         else:
-            self.data.append(item)
-            self.hash[item].append(self.nextindex)
-            self.nextindex += 1
-            if self.size <= self.nextindex:
+            if self.size <= self.stop:
                 self.full = True
-                self.nextindex = 0
 
-    def extend(self, items):
-        for x in items:
-            self.append(x)
+    def advance(self, n=1):
+        """Advance the window by n bytes"""
+        for _ in range(n):
+            self.next()
 
-    def search(self, buf):
-        counts = []
-        start = self.nextindex if self.full else 0
-        size = self.size if self.full else self.nextindex
+    def search(self):
+        start = self.start
+        stop = self.stop
+        size = self.size if self.full else self.stop
+
         match_max = min(self.match_max, size)
         match_min = self.match_min
 
-        indices = self.hash[buf[0]]
+        counts = []
+        indices = self.hash[self.data[self.index]]
         for i in indices:
-            matchlen = self.match(buf, i)
+            matchlen = self.match(i, self.index)
             if matchlen >= match_min:
-                if i < self.nextindex:
-                    disp = i - self.nextindex
-                else:
-                    disp = i - (self.size + self.nextindex)
-                counts.append((matchlen, disp))
+                disp = self.index - i
+                counts.append((matchlen, -disp))
                 if matchlen >= match_max:
                     return counts[-1]
 
@@ -63,46 +70,41 @@ class SlidingWindow:
 
         return None
 
-    def match(self, buf, i):
-        matchlen = 0
-        if self.full:
-            size = self.size - i
-        else:
-            size = self.nextindex - i
+    def match(self, start, bufstart):
+        size = self.index - start
 
         if size == 0:
             return 0
 
         matchlen = 0
-        for n in range(min(len(buf), self.match_max)):
-            if buf[n] == self.data[(i + (n % size)) % self.size]:
+        it = range(min(len(self.data) - bufstart, self.match_max))
+        for i in it:
+            if self.data[start + (i % size)] == self.data[bufstart + i]:
                 matchlen += 1
             else:
                 break
         return matchlen
 
-
 def _compress(input):
     """Generates a stream of tokens. Either a byte (int) or a tuple of (count,
     displacement)."""
 
-    window = SlidingWindow(size=2**12, match_min=3, match_max=3+15)
-    #window = SlidingWindow(size=2**12, match_min=3, match_max=0x111+0xffff)
+    window = SlidingWindow(input, size=2**12, match_min=3, match_max=3+15)
+    #window = SlidingWindow(input, size=2**12, match_min=3, match_max=0x111+0xffff)
 
     i = 0
     while True:
         if len(input) <= i:
             break
-        match = window.search(input[i:])
+        match = window.search()
         if match:
             yield match
-            i2 = i + match[0]
+            window.advance(match[0])
+            i += match[0]
         else:
             yield input[i]
-            i2 = i + 1
-
-        window.extend(input[i:i2])
-        i = i2
+            window.next()
+            i += 1
 
 def packflags(flags):
     n = 0
@@ -140,8 +142,8 @@ def compress(input, out):
                 count, disp = t
                 count -= 3
                 disp = (-disp) - 1
+                assert 0 <= disp < 4096
                 sh = (count << 12) | disp
-                #print (sh, file=stderr)
                 out.write(pack(">H", sh))
             else:
                 out.write(pack(">B", t))
