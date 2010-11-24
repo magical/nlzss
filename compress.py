@@ -7,27 +7,33 @@ from operator import itemgetter
 from struct import pack, unpack
 
 class SlidingWindow:
-    def __init__(self, buf, size=4096, disp_min=1, match_min=1, match_max=None):
+    # The size of the sliding window
+    size = 4096
+
+    # The minimum displacement.
+    disp_min = 1
+
+    # The minimum length for a successful match in the window
+    match_min = 1
+
+    # The maximum length of a successful match, inclusive.
+    match_max = None
+
+    def __init__(self, buf):
         self.data = buf
         self.hash = defaultdict(list)
         self.full = False
 
-        self.size = size
         self.start = 0
         self.stop = 0
-        self.index = disp_min - 1
+        self.index = self.disp_min - 1
 
-        self.match_min = match_min
-
-        if match_max is None:
-            match_max = size
-        self.match_max = min(size, match_max)
-
-        self.disp_min = disp_min
+        assert self.match_max is not None
 
     def next(self):
         if self.full:
             olditem = self.data[self.start]
+            assert self.hash[olditem][0] == self.start
             self.hash[olditem].pop(0)
 
         item = self.data[self.stop]
@@ -47,11 +53,7 @@ class SlidingWindow:
             self.next()
 
     def search(self):
-        start = self.start
-        stop = self.stop
-        size = self.size if self.full else self.stop
-
-        match_max = min(self.match_max, size)
+        match_max = self.match_max
         match_min = self.match_min
 
         counts = []
@@ -60,8 +62,11 @@ class SlidingWindow:
             matchlen = self.match(i, self.index)
             if matchlen >= match_min:
                 disp = self.index - i
+                #assert self.index - disp >= 0
+                #assert self.disp_min <= disp < self.size + self.disp_min
                 counts.append((matchlen, -disp))
                 if matchlen >= match_max:
+                    #assert matchlen == match_max
                     return counts[-1]
 
         if counts:
@@ -85,12 +90,26 @@ class SlidingWindow:
                 break
         return matchlen
 
-def _compress(input):
+class NLZ10Window(SlidingWindow):
+    size = 4096
+
+    match_min = 3
+    match_max = 3 + 0xf
+
+class NLZ11Window(SlidingWindow):
+    size = 4096
+
+    match_min = 3
+    match_max = 0x111 + 0xFFFF
+
+class NOverlayWindow(NLZ10Window):
+    disp_min = 3
+
+def _compress(input, windowclass=NLZ10Window):
     """Generates a stream of tokens. Either a byte (int) or a tuple of (count,
     displacement)."""
 
-    window = SlidingWindow(input, size=2**12, match_min=3, match_max=3+15)
-    #window = SlidingWindow(input, size=2**12, match_min=3, match_max=0x111+0xffff)
+    window = windowclass(input)
 
     i = 0
     while True:
@@ -99,6 +118,8 @@ def _compress(input):
         match = window.search()
         if match:
             yield match
+            #if match[1] == -283:
+            #    raise Exception(match, i)
             window.advance(match[0])
             i += match[0]
         else:
@@ -156,9 +177,69 @@ def compress(input, out):
     if padding:
         out.write(b'\xff' * padding)
 
+def compress_nlz11(input, out):
+    # header
+    out.write(pack("<L", (len(input) << 8) + 0x11))
+
+    # body
+    length = 0
+    for tokens in chunkit(_compress(input, windowclass=NLZ11Window), 8):
+        flags = [type(t) == tuple for t in tokens]
+        out.write(pack(">B", packflags(flags)))
+        length += 1
+
+        for t in tokens:
+            if type(t) == tuple:
+                count, disp = t
+                disp = (-disp) - 1
+                #if disp == 282:
+                #    raise Exception
+                assert 0 <= disp <= 0xFFF
+                if count <= 1 + 0xF:
+                    count -= 1
+                    assert 2 <= count <= 0xF
+                    sh = (count << 12) | disp
+                    out.write(pack(">H", sh))
+                    length += 2
+                elif count <= 0x11 + 0xFF:
+                    count -= 0x11
+                    assert 0 <= count <= 0xFF
+                    b = count >> 4
+                    sh = ((count & 0xF) << 12) | disp
+                    out.write(pack(">BH", b, sh))
+                    length += 3
+                elif count <= 0x111 + 0xFFFF:
+                    count -= 0x111
+                    assert 0 <= count <= 0xFFFF
+                    l = (1 << 28) | (count << 12) | disp
+                    out.write(pack(">L", l))
+                    length += 4
+                else:
+                    raise ValueError(count)
+            else:
+                out.write(pack(">B", t))
+                length += 1
+
+    # padding
+    padding = 4 - (length % 4 or 4)
+    if padding:
+        out.write(b'\xff' * padding)
+
+def dump_compress_nlz11(input, out):
+    # body
+    length = 0
+    def dump():
+        for t in _compress(input, windowclass=NLZ11Window):
+            if type(t) == tuple:
+                yield t
+    from pprint import pprint
+    pprint(list(dump()))
 
 if __name__ == '__main__':
     from sys import stdout, argv
     data = open(argv[1], "rb").read()
     stdout = stdout.detach()
-    compress(data, stdout)
+    #compress(data, stdout)
+    compress_nlz11(data, stdout)
+
+    #dump_compress_nlz11(data, stdout)

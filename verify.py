@@ -6,10 +6,10 @@ from os import SEEK_SET, SEEK_CUR, SEEK_END
 from errno import EPIPE
 from struct import pack, unpack
 
-__all__ = ('decompress', 'decompress_file', 'decompress_bytes',
-           'decompress_overlay', 'DecompressionError')
-
 class DecompressionError(ValueError):
+    pass
+
+class VerificationError(ValueError):
     pass
 
 def bits(byte):
@@ -74,30 +74,22 @@ def decompress_raw_lzss10(indata, decompressed_size, _overlay=False):
 
     return data
 
-def decompress_raw_lzss11(indata, decompressed_size):
-    """Decompress LZSS-compressed bytes. Returns a bytearray."""
-    data = bytearray()
-
+def lz11_tokens(indata):
     it = iter(indata)
+    i = 4
 
-    def writebyte(b):
-        data.append(b)
     def readbyte():
+        nonlocal i
+        i += 1
         return next(it)
-    def copybyte():
-        data.append(next(it))
 
-    while len(data) < decompressed_size:
-        b = readbyte()
-        if b == 0:
-            # dumb optimization
-            for _ in range(8):
-                copybyte()
-            continue
-        flags = bits(b)
+    while True:
+        flagpos = i
+        flags = bits(readbyte())
         for flag in flags:
+            pos = i
             if flag == 0:
-                copybyte()
+                yield readbyte(), pos, flagpos
             elif flag == 1:
                 b = readbyte()
                 indicator = b >> 4
@@ -123,106 +115,103 @@ def decompress_raw_lzss11(indata, decompressed_size):
                 disp = ((b & 0xf) << 8) + readbyte()
                 disp += 1
 
-                try:
-                    for _ in range(count):
-                        writebyte(data[-disp])
-                except IndexError:
-                    raise Exception(count, disp, len(data), sum(1 for x in it) )
+                yield (count, -disp), pos, flagpos
             else:
                 raise ValueError(flag)
 
-            if decompressed_size <= len(data):
-                break
+def verify(obj):
+    """Verify LZSS-compressed bytes or a file-like object.
 
-    if len(data) != decompressed_size:
-        raise DecompressionError("decompressed size does not match the expected size")
-
-    return data
-
-
-def decompress_overlay(f, out):
-    # the compression header is at the end of the file
-    f.seek(-8, SEEK_END)
-    header = f.read(8)
-
-    # decompression goes backwards.
-    # end < here < start
-
-    # end_delta == here - decompression end address
-    # start_delta == decompression start address - here
-    end_delta, start_delta = unpack("<LL", header)
-
-    filelen = f.tell()
-
-    padding = end_delta >> 0x18
-    end_delta &= 0xFFFFFF
-    decompressed_size = start_delta + end_delta
-
-    f.seek(-end_delta, SEEK_END)
-
-    data = bytearray()
-    data.extend(f.read(end_delta - padding))
-    data.reverse()
-
-    #stdout.write(data.tostring())
-
-    uncompressed_data = decompress_raw_lzss10(data, decompressed_size,
-                                              _overlay=True)
-    uncompressed_data.reverse()
-
-    # first we write up to the portion of the file which was "overwritten" by
-    # the decompressed data, then the decompressed data itself.
-    # i wonder if it's possible for decompression to overtake the compressed
-    # data, so that the decompression code is reading its own output...
-    f.seek(0, SEEK_SET)
-    out.write(f.read(filelen - end_delta))
-    out.write(uncompressed_data)
-
-def decompress(obj):
-    """Decompress LZSS-compressed bytes or a file-like object.
-
-    Shells out to decompress_file() or decompress_bytes() depending on
+    Shells out to verify_file() or verify_bytes() depending on
     whether or not the passed-in object has a 'read' attribute or not.
 
-    Returns a bytearray."""
+    Returns None on success. Raises an exception on error."""
     if hasattr(obj, 'read'):
-        return decompress_file(obj)
+        return verify_file(obj)
     else:
-        return decompress_bytes(obj)
+        return verify_bytes(obj)
 
-def decompress_bytes(data):
-    """Decompress LZSS-compressed bytes. Returns a bytearray."""
+def verify_bytes(data):
+    """Verify LZSS-compressed bytes.
+
+    Returns None on success. Raises an exception on error.
+    """
     header = data[:4]
     if header[0] == 0x10:
-        decompress_raw = decompress_raw_lzss10
+        tokenize = lz10_tokens
     elif header[0] == 0x11:
-        decompress_raw = decompress_raw_lzss11
+        tokenize = lz11_tokens
     else:
-        raise DecompressionError("not as lzss-compressed file")
+        raise VerificationError("not as lzss-compressed file")
 
     decompressed_size, = unpack("<L", header[1:] + b'\x00')
 
     data = data[4:]
-    return decompress_raw(data, decompressed_size)
+    tokens = tokenize(data, decompressed_size)
+    return verify_tokens(tokens)
 
-def decompress_file(f):
-    """Decompress an LZSS-compressed file. Returns a bytearray.
+def verify_file(f):
+    """Verify an LZSS-compressed file.
 
-    This isn't any more efficient than decompress_bytes, as it reads
-    the entire file into memory. It is offered as a convenience.
+    Returns None on success. Raises an exception on error.
     """
     header = f.read(4)
     if header[0] == 0x10:
-        decompress_raw = decompress_raw_lzss10
+        tokenize = lz10_tokens
     elif header[0] == 0x11:
-        decompress_raw = decompress_raw_lzss11
+        tokenize = lz11_tokens
     else:
-        raise DecompressionError("not as lzss-compressed file")
+        raise VerificationError("not as lzss-compressed file")
 
     decompressed_size, = unpack("<L", header[1:] + b'\x00')
 
     data = f.read()
-    return decompress_raw(data, decompressed_size)
+    tokens = tokenize(data)
+    return verify_tokens(tokens, decompressed_size)
+
+def verify_tokens(tokens, decompressed_length):
+    length = 0
+    for t in tokens:
+        t, pos, flagpos = t
+        if type(t) == tuple:
+            count, disp = t
+            assert disp < 0
+            assert 0 < count
+            if disp + length < 0:
+                raise VerificationError(
+                    "disp too large. length: {:#x}, disp: {:#x}, pos: {:#x}, flagpos: {:#x}"
+                    .format(length, disp, pos, flagpos))
+            length += count
+        else:
+            length += 1
+
+        if length >= decompressed_length:
+            break
+
+    if length != decompressed_length:
+        raise VerificationError(
+            "decompressed size does not match. got: {:#x}, expected: {:#x}".format(
+                length, decompressed_length))
+
+def dump_file(f):
+    header = f.read(4)
+    if header[0] == 0x10:
+        tokenize = lz10_tokens
+    elif header[0] == 0x11:
+        tokenize = lz11_tokens
+    else:
+        raise VerificationError("not as lzss-compressed file")
+
+    decompressed_size, = unpack("<L", header[1:] + b'\x00')
+
+    data = f.read()
+    tokens = tokenize(data)
+    def dump():
+        for t, pos, flagpos in tokens:
+            if type(t) == tuple:
+                yield t
+    from pprint import pprint
+    pprint(list(dump()))
 
 def main(args=None):
     if args is None:
@@ -236,7 +225,7 @@ def main(args=None):
 
     if len(args) < 1 or args[0] == '-':
         if overlay:
-            print("Can't decompress overlays from stdin", file=stderr)
+            print("Can't verify overlays from stdin", file=stderr)
             return 2
 
         if hasattr(stdin, 'detach'):
@@ -250,23 +239,13 @@ def main(args=None):
             print(e, file=stderr)
             return 2
 
-    stdout = sys.stdout
-    if hasattr(stdout, 'detach'):
-        # grab the underlying binary stream
-        stdout = stdout.detach()
-
     try:
         if overlay:
-            decompress_overlay(f, stdout)
+            print("Can't verify overlays", file=stderr)
         else:
-            stdout.write(decompress_file(f))
-    except IOError as e:
-        if e.errno == EPIPE:
-            # don't complain about a broken pipe
-            pass
-        else:
-            raise
-    except (DecompressionError,) as e:
+            #verify_file(f)
+            dump_file(f)
+    except (VerificationError,) as e:
         print(e, file=stderr)
         return 1
 

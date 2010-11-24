@@ -2,7 +2,7 @@
 
 from lzss3 import (decompress_raw_lzss10, decompress_raw_lzss11,
                    decompress_overlay, decompress)
-from compress import _compress, compress
+from compress import _compress, compress, compress_nlz11, NLZ11Window
 
 from io import BytesIO
 
@@ -35,6 +35,13 @@ def test_compress():
     assert list(_compress(b'abcdefg' * 10)) == \
         [97, 98, 99, 100, 101, 102, 103, (18, -7), (18, -21), (18, -42), (9, -56)]
 
+    assert list(_compress(b'abcdefg' * 10, NLZ11Window)) == \
+        [97, 98, 99, 100, 101, 102, 103, (63, -7)]
+
+    out = BytesIO()
+    compress_nlz11(b'abcdefg' * 10, out)
+    assert out.getvalue()[12:15] == b'\x02\xe0\x06'
+
 def test_roundtrip():
     #assert False
     with open("lzss3.py", "rb") as f:
@@ -47,6 +54,15 @@ def test_roundtrip():
     decompressed_data = decompress(out.getvalue())
     assert indata == decompressed_data
 
+
+    #same as above, but with lz11
+    out = BytesIO()
+    compress_nlz11(indata, out)
+    compressed_data = out.getvalue()
+    assert len(compressed_data) < len(indata)
+
+    decompressed_data = decompress(out.getvalue())
+    assert indata == decompressed_data
 
 if __name__ == '__main__':
     test_lzss10()
