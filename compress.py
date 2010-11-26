@@ -11,7 +11,11 @@ class SlidingWindow:
     size = 4096
 
     # The minimum displacement.
-    disp_min = 1
+    disp_min = 2
+
+    # The hard minimum — a disp less than this can't be represented in the
+    # compressed stream.
+    disp_start = 1
 
     # The minimum length for a successful match in the window
     match_min = 1
@@ -26,11 +30,16 @@ class SlidingWindow:
 
         self.start = 0
         self.stop = 0
-        self.index = self.disp_min - 1
+        #self.index = self.disp_min - 1
+        self.index = 0
 
         assert self.match_max is not None
 
     def next(self):
+        if self.index < self.disp_start - 1:
+            self.index += 1
+            return
+
         if self.full:
             olditem = self.data[self.start]
             assert self.hash[olditem][0] == self.start
@@ -64,10 +73,11 @@ class SlidingWindow:
                 disp = self.index - i
                 #assert self.index - disp >= 0
                 #assert self.disp_min <= disp < self.size + self.disp_min
-                counts.append((matchlen, -disp))
-                if matchlen >= match_max:
-                    #assert matchlen == match_max
-                    return counts[-1]
+                if self.disp_min <= disp:
+                    counts.append((matchlen, -disp))
+                    if matchlen >= match_max:
+                        #assert matchlen == match_max
+                        return counts[-1]
 
         if counts:
             match = max(counts, key=itemgetter(0))
