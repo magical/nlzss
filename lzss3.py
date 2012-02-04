@@ -47,11 +47,6 @@ def decompress_raw_lzss10(indata, decompressed_size, _overlay=False):
 
     while len(data) < decompressed_size:
         b = readbyte()
-        if b == 0:
-            # dumb optimization
-            for _ in range(8):
-                copybyte()
-            continue
         flags = bits(b)
         for flag in flags:
             if flag == 0:
@@ -89,11 +84,6 @@ def decompress_raw_lzss11(indata, decompressed_size):
 
     while len(data) < decompressed_size:
         b = readbyte()
-        if b == 0:
-            # dumb optimization
-            for _ in range(8):
-                copybyte()
-            continue
         flags = bits(b)
         for flag in flags:
             if flag == 0:
