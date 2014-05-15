@@ -229,8 +229,8 @@ def main(args=None):
             print("Can't decompress overlays from stdin", file=stderr)
             return 2
 
-        if hasattr(stdin, 'detach'):
-            f = stdin.detach()
+        if hasattr(stdin, 'buffer'):
+            f = stdin.buffer
         else:
             f = stdin
     else:
@@ -241,9 +241,9 @@ def main(args=None):
             return 2
 
     stdout = sys.stdout
-    if hasattr(stdout, 'detach'):
+    if hasattr(stdout, 'buffer'):
         # grab the underlying binary stream
-        stdout = stdout.detach()
+        stdout = stdout.buffer
 
     try:
         if overlay:
